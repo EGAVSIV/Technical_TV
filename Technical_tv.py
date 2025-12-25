@@ -9,13 +9,13 @@ import requests
 # PAGE CONFIG
 # ==================================================
 st.set_page_config(
-    page_title="📉 Indian Technical Stock Screener",
-    page_icon="📈",
+    page_title="📈 Indian Technical Stock Screener",
+    page_icon="📊",
     layout="wide"
 )
 
 st.title("📈 Indian Stock Technical Screener")
-st.caption("Powered by TradingView Technical Data | NSE + BSE")
+st.caption("RSI • EMA • Bollinger • Stochastic • ADX | NSE + BSE")
 
 # ==================================================
 # SIDEBAR – PRESETS
@@ -26,8 +26,6 @@ PRESETS = {
     "Biggest Losers": "losers",
     "Most Active": "most_active",
     "Unusual Volume": "unusual_volume",
-    "Overbought (RSI > 70)": "overbought",
-    "Oversold (RSI < 30)": "oversold",
 }
 
 st.sidebar.header("📌 Preset Filters")
@@ -37,23 +35,50 @@ preset_value = PRESETS[preset_label]
 # ==================================================
 # TECHNICAL FILTERS
 # ==================================================
-st.sidebar.header("📉 Technical Filters")
+st.sidebar.header("📉 Momentum Filters")
 
-min_rsi = st.sidebar.slider("Min RSI", 0, 100, 40)
-max_rsi = st.sidebar.slider("Max RSI", 0, 100, 70)
+min_rsi = st.sidebar.slider("RSI Min", 0, 100, 40)
+max_rsi = st.sidebar.slider("RSI Max", 0, 100, 75)
 
-price_above_ema20 = st.sidebar.checkbox("Price Above EMA 20", True)
-price_above_ema50 = st.sidebar.checkbox("Price Above EMA 50", True)
-price_above_ema200 = st.sidebar.checkbox("Price Above EMA 200", False)
+st.sidebar.header("📊 Trend Filters")
 
-min_volume = st.sidebar.number_input("Min Volume", min_value=0, value=100000)
+adx_min = st.sidebar.slider("ADX Min (Trend Strength)", 0, 60, 20)
+
+trend_direction = st.sidebar.selectbox(
+    "Trend Direction",
+    ["Any", "Bullish (+DI > -DI)", "Bearish (-DI > +DI)"]
+)
+
+st.sidebar.header("📐 EMA Filters")
+
+ema20 = st.sidebar.checkbox("Price > EMA 20", True)
+ema50 = st.sidebar.checkbox("Price > EMA 50", True)
+ema200 = st.sidebar.checkbox("Price > EMA 200", False)
+
+st.sidebar.header("📦 Bollinger Band Filters")
+
+bb_condition = st.sidebar.selectbox(
+    "Bollinger Condition",
+    ["Any", "Near Lower Band", "Above Upper Band"]
+)
+
+st.sidebar.header("🎯 Stochastic Filters")
+
+stoch_mode = st.sidebar.selectbox(
+    "Stochastic Mode",
+    ["Any", "Oversold (<20)", "Overbought (>80)", "Bullish (%K > %D)", "Bearish (%K < %D)"]
+)
+
+st.sidebar.header("🔊 Liquidity")
+
+min_volume = st.sidebar.number_input("Min Volume", value=100000)
 
 limit = st.sidebar.slider("Number of Stocks", 10, 200, 50)
 
-run_scan = st.sidebar.button("🚀 Run Technical Screener")
+run_scan = st.sidebar.button("🚀 Run Screener")
 
 # ==================================================
-# SAFE TECHNICAL SCREENER FUNCTION
+# TECHNICAL SCAN FUNCTION
 # ==================================================
 def run_technical_scan(preset: Optional[str]) -> pd.DataFrame:
     try:
@@ -70,8 +95,13 @@ def run_technical_scan(preset: Optional[str]) -> pd.DataFrame:
                 "EMA20",
                 "EMA50",
                 "EMA200",
-                "MACD.macd",
-                "MACD.signal",
+                "BB.upper",
+                "BB.lower",
+                "Stoch.K",
+                "Stoch.D",
+                "ADX",
+                "ADX+DI",
+                "ADX-DI",
             )
             .where(
                 col("type") == "stock",
@@ -80,16 +110,40 @@ def run_technical_scan(preset: Optional[str]) -> pd.DataFrame:
                 col("RSI") >= min_rsi,
                 col("RSI") <= max_rsi,
                 col("volume") >= min_volume,
+                col("ADX") >= adx_min,
             )
             .limit(limit)
         )
 
-        if price_above_ema20:
+        # EMA CONDITIONS
+        if ema20:
             q = q.where(col("close") > col("EMA20"))
-        if price_above_ema50:
+        if ema50:
             q = q.where(col("close") > col("EMA50"))
-        if price_above_ema200:
+        if ema200:
             q = q.where(col("close") > col("EMA200"))
+
+        # ADX DIRECTION
+        if trend_direction == "Bullish (+DI > -DI)":
+            q = q.where(col("ADX+DI") > col("ADX-DI"))
+        elif trend_direction == "Bearish (-DI > +DI)":
+            q = q.where(col("ADX-DI") > col("ADX+DI"))
+
+        # BOLLINGER
+        if bb_condition == "Near Lower Band":
+            q = q.where(col("close") <= col("BB.lower") * 1.02)
+        elif bb_condition == "Above Upper Band":
+            q = q.where(col("close") > col("BB.upper"))
+
+        # STOCHASTIC
+        if stoch_mode == "Oversold (<20)":
+            q = q.where(col("Stoch.K") < 20)
+        elif stoch_mode == "Overbought (>80)":
+            q = q.where(col("Stoch.K") > 80)
+        elif stoch_mode == "Bullish (%K > %D)":
+            q = q.where(col("Stoch.K") > col("Stoch.D"))
+        elif stoch_mode == "Bearish (%K < %D)":
+            q = q.where(col("Stoch.K") < col("Stoch.D"))
 
         if preset:
             q = q.set_property("preset", preset)
@@ -98,57 +152,37 @@ def run_technical_scan(preset: Optional[str]) -> pd.DataFrame:
         return df
 
     except requests.exceptions.HTTPError:
-        st.error("TradingView rejected the request. Reduce filters or stock count.")
+        st.error("TradingView rejected the request. Reduce filters.")
         return pd.DataFrame()
-
     except Exception as e:
         st.error(f"Unexpected error: {e}")
         return pd.DataFrame()
 
 # ==================================================
-# MAIN OUTPUT
+# OUTPUT
 # ==================================================
 if run_scan:
-
-    with st.spinner("Scanning Indian Markets (Technical)..."):
+    with st.spinner("Scanning Indian Markets..."):
         df = run_technical_scan(preset_value)
 
     if df.empty:
-        st.warning("No stocks matched the technical criteria.")
+        st.warning("No stocks matched the criteria.")
     else:
-        df["MACD Trend"] = df["MACD.macd"] - df["MACD.signal"]
-
-        display_cols = [
-            "name",
-            "sector",
-            "close",
-            "change",
-            "volume",
-            "RSI",
-            "EMA20",
-            "EMA50",
-            "EMA200",
-            "MACD Trend",
-        ]
-
-        st.subheader(f"📋 Technical Screener Results ({len(df)} stocks)")
+        st.subheader(f"📋 Results ({len(df)} stocks)")
 
         st.dataframe(
-            df[display_cols].sort_values("RSI", ascending=False),
+            df.sort_values("ADX", ascending=False),
             use_container_width=True
         )
 
-        # =========================
-        # EXPORT TO EXCEL
-        # =========================
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
             df.to_excel(writer, index=False, sheet_name="Technical")
 
         st.download_button(
-            label="⬇️ Download Excel",
-            data=output.getvalue(),
-            file_name="india_technical_screener.xlsx",
+            "⬇️ Download Excel",
+            output.getvalue(),
+            "india_technical_screener.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
@@ -159,7 +193,7 @@ st.markdown("---")
 st.markdown(
     """
 **Designed by Gaurav**  
-📈 Technical • Quant • Price Action Intelligence  
-Built with ❤️ using TradingView data
+Price Action • Momentum • Trend Intelligence  
+Built with ❤️ using TradingView
 """
 )
